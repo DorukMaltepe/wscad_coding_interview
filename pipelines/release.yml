@@ -1,0 +1,40 @@
+# Release: promotes the installer from a successful CI run on release/*.
+# Nothing is rebuilt: the exact binaries that passed every test are released.
+
+trigger: none
+pr: none
+
+resources:
+  pipelines:
+    - pipeline: ci
+      source: DesktopApp-CI # Name of the pipeline created from ci.yml in Azure DevOps.
+      trigger:
+        branches:
+          include:
+            - release/*
+
+stages:
+  - stage: Release
+    displayName: Publish release package
+    jobs:
+      - deployment: PublishInstaller
+        displayName: Publish installer to release feed
+        pool: Windows-Build
+        # Approvals and checks (e.g. release manager sign-off) are configured on this environment in Azure DevOps.
+        environment: DesktopApp-Production
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: ci
+                  artifact: installer
+
+                - task: UniversalPackages@1
+                  displayName: Publish installer as universal package
+                  inputs:
+                    command: publish
+                    feed: DesktopApp/desktop-releases
+                    packageName: desktopapp-installer
+                    packageVersion: $(resources.pipeline.ci.runName)
+                    directory: $(Pipeline.Workspace)/ci/installer
+                    packageDescription: DesktopApp installer $(resources.pipeline.ci.runName)

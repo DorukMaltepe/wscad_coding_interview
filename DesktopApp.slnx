@@ -1,0 +1,14 @@
+<Solution>
+  <!-- The installer is not part of the solution: the pipeline builds it from the published app artifact. -->
+  <Folder Name="/src/">
+    <Project Path="src/DesktopApp/DesktopApp.csproj" />
+    <Project Path="src/DesktopApp.Core/DesktopApp.Core.csproj" />
+    <Project Path="src/DesktopApp.Storage/DesktopApp.Storage.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DesktopApp.Core.Tests/DesktopApp.Core.Tests.csproj" />
+    <Project Path="tests/DesktopApp.Installer.Tests/DesktopApp.Installer.Tests.csproj" />
+    <Project Path="tests/DesktopApp.IntegrationTests/DesktopApp.IntegrationTests.csproj" />
+    <Project Path="tests/DesktopApp.UITests/DesktopApp.UITests.csproj" />
+  </Folder>
+</Solution>

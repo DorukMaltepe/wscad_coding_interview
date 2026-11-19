@@ -1,0 +1,159 @@
+# CI: build once, run every test level, build the installer, test the installer, publish artifacts.
+# Runs after each merge to main or release/*. Successful runs from release/* feed release.yml.
+
+name: $(majorMinor).$(Rev:r) # Becomes the app and MSI version, e.g. 1.0.42.
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+      - release/*
+
+pr: none
+
+variables:
+  majorMinor: '1.0'
+
+stages:
+  - stage: Build
+    displayName: Build and test
+    pool: Windows-Build
+    jobs:
+      - job: Build
+        steps:
+          - template: templates/build-and-test.yml
+            parameters:
+              version: $(Build.BuildNumber)
+
+          - script: dotnet publish src/DesktopApp/DesktopApp.csproj --no-build -c Release -o $(Build.ArtifactStagingDirectory)/app
+            displayName: Publish app
+
+          - publish: $(Build.ArtifactStagingDirectory)/app
+            artifact: app
+            displayName: Publish app artifact
+
+          - publish: tests/DesktopApp.UITests/bin/Release/net10.0-windows
+            artifact: uitests
+            displayName: Publish UI test artifact
+
+          - publish: tests/DesktopApp.Installer.Tests/bin/Release/net10.0-windows
+            artifact: installertests
+            displayName: Publish installer test artifact
+
+  - stage: UITests
+    displayName: UI tests
+    dependsOn: Build
+    # Dedicated pool: its agent runs in an interactive, auto-logged-on session
+    # (configured with --runAsAutoLogon), not as a Windows service, so the app can show real windows.
+    pool: Windows-UI-Interactive
+    jobs:
+      - job: UITests
+        steps:
+          - checkout: none
+
+          - download: current
+            artifact: app
+
+          - download: current
+            artifact: uitests
+
+          # No checkout here, so no global.json; SDK 10 also brings the net10.0 runtime the UI tests need.
+          - task: UseDotNet@2
+            displayName: Use .NET 10 SDK
+            inputs:
+              version: 10.0.x
+
+          # Tests the exact binaries that go into the installer, not a rebuild.
+          # UI tests and app lifecycle/crash tests (startup, saved data, bad input, crash logging).
+          - script: dotnet test $(Pipeline.Workspace)/uitests/DesktopApp.UITests.dll --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+            displayName: Run UI and app tests
+            env:
+              DESKTOPAPP_EXE: $(Pipeline.Workspace)/app/DesktopApp.exe
+
+          - task: PublishTestResults@2
+            displayName: Publish UI test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: VSTest
+              testResultsFiles: '**/*.trx'
+              searchFolder: $(Agent.TempDirectory)/TestResults
+              testRunTitle: UI tests
+
+  - stage: Package
+    displayName: Build installer
+    # Waits for UI tests too, so an installer never exists for a build that failed them.
+    dependsOn:
+      - Build
+      - UITests
+    pool: Windows-Build
+    jobs:
+      - job: Installer
+        steps:
+          - checkout: self
+            clean: true
+
+          - download: current
+            artifact: app
+
+          - task: UseDotNet@2
+            displayName: Use .NET SDK from global.json
+            inputs:
+              useGlobalJson: true
+
+          - task: NuGetAuthenticate@1
+            displayName: Authenticate to Azure Artifacts feed
+
+          - script: >-
+              dotnet build installer/DesktopApp.Installer/DesktopApp.Installer.wixproj -c Release
+              -p:AppDir=$(Pipeline.Workspace)/app
+              -p:AppVersion=$(Build.BuildNumber)
+              -o $(Build.ArtifactStagingDirectory)/installer
+            displayName: Build MSI from app artifact
+
+          - publish: $(Build.ArtifactStagingDirectory)/installer
+            artifact: installer
+            displayName: Publish installer artifact
+
+  - stage: InstallerTests
+    displayName: Installer tests
+    dependsOn: Package
+    # Installs, starts and uninstalls the MSI for real, so it needs a desktop session and admin rights.
+    # The agent account must be a local administrator. Use a disposable or reset machine: tests change Program Files.
+    pool: Windows-UI-Interactive
+    jobs:
+      - job: InstallerTests
+        steps:
+          - checkout: none
+
+          - download: current
+            artifact: installer
+
+          - download: current
+            artifact: app
+
+          - download: current
+            artifact: installertests
+
+          - task: UseDotNet@2
+            displayName: Use .NET 10 SDK
+            inputs:
+              version: 10.0.x
+
+          # Tests the exact MSI that release.yml will publish. A failure here fails the CI run, so it is never released.
+          - script: dotnet test $(Pipeline.Workspace)/installertests/DesktopApp.Installer.Tests.dll --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+            displayName: Run installer tests
+            env:
+              DESKTOPAPP_MSI: $(Pipeline.Workspace)/installer/DesktopApp-$(Build.BuildNumber).msi
+              DESKTOPAPP_APP_DIR: $(Pipeline.Workspace)/app
+              DESKTOPAPP_VERSION: $(Build.BuildNumber)
+              DESKTOPAPP_REQUIRE_ELEVATED: 'true' # A skipped install test must not pass silently.
+
+          - task: PublishTestResults@2
+            displayName: Publish installer test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: VSTest
+              testResultsFiles: '**/*.trx'
+              searchFolder: $(Agent.TempDirectory)/TestResults
+              testRunTitle: Installer tests

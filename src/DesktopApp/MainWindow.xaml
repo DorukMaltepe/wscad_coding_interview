@@ -1,0 +1,284 @@
+<Window x:Class="DesktopApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:DesktopApp"
+        Title="DesktopApp" Width="1280" Height="800" MinWidth="900" MinHeight="600"
+        WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown">
+    <!-- x:Name values double as UI Automation ids used by tests/DesktopApp.UITests. -->
+    <Window.Resources>
+        <DrawingBrush x:Key="GridBrush" TileMode="Tile" Viewport="0,0,20,20" ViewportUnits="Absolute">
+            <DrawingBrush.Drawing>
+                <GeometryDrawing Brush="White" Geometry="M0,0 L20,0 20,20 0,20Z">
+                    <GeometryDrawing.Pen>
+                        <Pen Brush="#FFE2E2E2" Thickness="0.5" />
+                    </GeometryDrawing.Pen>
+                </GeometryDrawing>
+            </DrawingBrush.Drawing>
+        </DrawingBrush>
+    </Window.Resources>
+    <Window.CommandBindings>
+        <CommandBinding Command="New" Executed="NewProject_Executed" />
+        <CommandBinding Command="Open" Executed="NotAvailable_Executed" />
+        <CommandBinding Command="Save" Executed="NotAvailable_Executed" />
+        <CommandBinding Command="Print" Executed="NotAvailable_Executed" />
+    </Window.CommandBindings>
+
+    <DockPanel>
+        <Menu x:Name="MainMenu" DockPanel.Dock="Top">
+            <MenuItem x:Name="FileMenu" Header="_File">
+                <MenuItem x:Name="NewProjectMenuItem" Header="_New project..." Command="New" />
+                <MenuItem x:Name="OpenProjectMenuItem" Header="_Open project..." Command="Open" />
+                <MenuItem x:Name="SaveProjectMenuItem" Header="_Save project" Command="Save" />
+                <Separator />
+                <MenuItem x:Name="ExportMenu" Header="_Export">
+                    <MenuItem x:Name="ExportPdfMenuItem" Header="_PDF..." Tag="PDF export" Click="NotAvailable_Click" />
+                    <MenuItem x:Name="ExportDxfMenuItem" Header="_DXF/DWG..." Tag="DXF/DWG export" Click="NotAvailable_Click" />
+                    <MenuItem x:Name="ExportBomMenuItem" Header="_Bill of materials (CSV)..." Tag="Bill of materials export" Click="NotAvailable_Click" />
+                </MenuItem>
+                <MenuItem x:Name="PrintMenuItem" Header="_Print..." Command="Print" />
+                <Separator />
+                <MenuItem x:Name="ExitMenuItem" Header="E_xit" Click="Exit_Click" />
+            </MenuItem>
+            <MenuItem x:Name="EditMenu" Header="_Edit">
+                <!-- Undo and redo are not implemented: they stay disabled. -->
+                <MenuItem x:Name="UndoMenuItem" Header="_Undo" InputGestureText="Ctrl+Z" IsEnabled="False" />
+                <MenuItem x:Name="RedoMenuItem" Header="_Redo" InputGestureText="Ctrl+Y" IsEnabled="False" />
+                <Separator />
+                <MenuItem x:Name="DeleteMenuItem" Header="_Delete device" InputGestureText="Del" IsEnabled="False" Click="DeleteDevice_Click" />
+            </MenuItem>
+            <MenuItem x:Name="ViewMenu" Header="Vie_w">
+                <MenuItem x:Name="ShowGridMenuItem" Header="_Grid" IsCheckable="True" IsChecked="{Binding IsChecked, ElementName=ShowGridCheckBox}" />
+                <MenuItem x:Name="SnapToGridMenuItem" Header="_Snap to grid" IsCheckable="True" IsChecked="{Binding IsChecked, ElementName=SnapToGridCheckBox}" />
+                <Separator />
+                <MenuItem x:Name="ZoomInMenuItem" Header="Zoom _in" Click="ZoomIn_Click" />
+                <MenuItem x:Name="ZoomOutMenuItem" Header="Zoom _out" Click="ZoomOut_Click" />
+                <MenuItem x:Name="ZoomResetMenuItem" Header="_100 %" Click="ZoomReset_Click" />
+            </MenuItem>
+            <MenuItem x:Name="ProjectMenu" Header="_Project">
+                <MenuItem x:Name="AddPageMenuItem" Header="_Add page" Click="AddPage_Click" />
+                <MenuItem x:Name="RemovePageMenuItem" Header="_Remove page" Click="RemovePage_Click" />
+                <Separator />
+                <MenuItem x:Name="ProjectPropertiesMenuItem" Header="_Properties..." Tag="Project properties" Click="NotAvailable_Click" />
+            </MenuItem>
+            <MenuItem x:Name="ToolsMenu" Header="_Tools">
+                <MenuItem x:Name="CheckProjectMenuItem" Header="_Check project" Tag="Project check" Click="NotAvailable_Click" />
+                <MenuItem x:Name="OptionsMenuItem" Header="_Options..." Tag="Options" Click="NotAvailable_Click" />
+            </MenuItem>
+            <MenuItem x:Name="HelpMenu" Header="_Help">
+                <MenuItem x:Name="AboutMenuItem" Header="_About DesktopApp" Click="About_Click" />
+            </MenuItem>
+        </Menu>
+
+        <ToolBarTray DockPanel.Dock="Top">
+            <ToolBar x:Name="MainToolBar">
+                <Button x:Name="NewProjectButton" Content="New" Command="New" ToolTip="New project (Ctrl+N)" />
+                <Button x:Name="OpenProjectButton" Content="Open" Command="Open" ToolTip="Open project (Ctrl+O)" />
+                <Button x:Name="SaveProjectButton" Content="Save" Command="Save" ToolTip="Save project (Ctrl+S)" />
+                <Separator />
+                <Button x:Name="UndoButton" Content="Undo" IsEnabled="False" ToolTip="Undo (Ctrl+Z)" />
+                <Button x:Name="RedoButton" Content="Redo" IsEnabled="False" ToolTip="Redo (Ctrl+Y)" />
+                <Separator />
+                <RadioButton x:Name="SelectToolButton" GroupName="Tool" Content="Select" Checked="Tool_Checked" />
+                <RadioButton x:Name="PlaceToolButton" GroupName="Tool" Content="Place symbol" Checked="Tool_Checked" />
+                <RadioButton x:Name="WireToolButton" GroupName="Tool" Content="Wire" Checked="Tool_Checked" />
+                <Separator />
+                <Button x:Name="ZoomOutButton" Content="Zoom −" Click="ZoomOut_Click" ToolTip="Zoom out" />
+                <Button x:Name="ZoomInButton" Content="Zoom +" Click="ZoomIn_Click" ToolTip="Zoom in" />
+            </ToolBar>
+        </ToolBarTray>
+
+        <StatusBar x:Name="MainStatusBar" DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <TextBlock x:Name="StatusText" Text="Ready" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="ActiveToolText" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="CursorPositionText" Text="X: 0  Y: 0" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="DeviceCountText" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <CheckBox x:Name="ShowGridCheckBox" Content="Grid" IsChecked="True" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <CheckBox x:Name="SnapToGridCheckBox" Content="Snap" IsChecked="True" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <StackPanel Orientation="Horizontal">
+                    <Slider x:Name="ZoomSlider" Width="120" Minimum="0.25" Maximum="4" Value="1"
+                            AutomationProperties.Name="Zoom" VerticalAlignment="Center" />
+                    <TextBlock x:Name="ZoomText" Width="45" Margin="6,0,0,0"
+                               Text="{Binding Value, ElementName=ZoomSlider, StringFormat={}{0:P0}}" />
+                </StackPanel>
+            </StatusBarItem>
+        </StatusBar>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="240" MinWidth="160" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="260" MinWidth="200" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: project explorer and symbol library -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <GroupBox x:Name="ProjectExplorer" Header="Project explorer" Margin="4">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,2,0,4">
+                            <Button x:Name="AddPageButton" Content="Add page" Padding="6,1" Click="AddPage_Click" />
+                            <Button x:Name="RemovePageButton" Content="Remove page" Padding="6,1" Margin="4,0,0,0" Click="RemovePage_Click" />
+                        </StackPanel>
+                        <TreeView x:Name="ProjectTree" SelectedItemChanged="ProjectTree_SelectedItemChanged">
+                            <TreeViewItem x:Name="ProjectNode" IsExpanded="True" />
+                        </TreeView>
+                    </DockPanel>
+                </GroupBox>
+                <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" />
+                <GroupBox x:Name="SymbolLibraryPanel" Header="Symbol library" Grid.Row="2" Margin="4">
+                    <DockPanel>
+                        <ComboBox x:Name="CategoryFilter" DockPanel.Dock="Top" Margin="0,2,0,4"
+                                  AutomationProperties.Name="Category" SelectionChanged="SymbolFilter_Changed" />
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                            <Label Content="_Search" Target="{Binding ElementName=SymbolSearchInput}" Padding="0,0,6,0" />
+                            <TextBox x:Name="SymbolSearchInput" TextChanged="SymbolFilter_Changed" />
+                        </DockPanel>
+                        <Button x:Name="InsertSymbolButton" DockPanel.Dock="Bottom" Content="_Insert on page" Margin="0,4,0,0"
+                                IsEnabled="False" Click="InsertSymbol_Click" />
+                        <ListBox x:Name="SymbolList" SelectionChanged="SymbolList_SelectionChanged" />
+                    </DockPanel>
+                </GroupBox>
+            </Grid>
+
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch" />
+
+            <!-- Centre: drawing area and bottom panels -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="200" MinHeight="80" />
+                </Grid.RowDefinitions>
+                <ScrollViewer x:Name="DrawingScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                              Background="#FF8F8F8F">
+                    <local:SchematicCanvas x:Name="DrawingCanvas" Width="1680" Height="1188" Margin="20"
+                                           MouseLeftButtonDown="DrawingCanvas_MouseLeftButtonDown" MouseMove="DrawingCanvas_MouseMove">
+                        <local:SchematicCanvas.Style>
+                            <Style TargetType="local:SchematicCanvas">
+                                <Setter Property="Background" Value="White" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsChecked, ElementName=ShowGridCheckBox}" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource GridBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </local:SchematicCanvas.Style>
+                        <local:SchematicCanvas.LayoutTransform>
+                            <ScaleTransform ScaleX="{Binding Value, ElementName=ZoomSlider}" ScaleY="{Binding Value, ElementName=ZoomSlider}" />
+                        </local:SchematicCanvas.LayoutTransform>
+                        <Border x:Name="TitleBlock" Canvas.Right="0" Canvas.Bottom="0" MinWidth="280" Padding="6"
+                                Background="White" BorderBrush="Black" BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Project:" Margin="0,0,8,0" />
+                                <TextBlock x:Name="TitleBlockProject" Grid.Column="1" FontWeight="Bold" />
+                                <TextBlock Text="Customer:" Grid.Row="1" Margin="0,0,8,0" />
+                                <TextBlock x:Name="TitleBlockCustomer" Grid.Row="1" Grid.Column="1" />
+                                <TextBlock Text="Standard:" Grid.Row="2" Margin="0,0,8,0" />
+                                <TextBlock x:Name="TitleBlockStandard" Grid.Row="2" Grid.Column="1" />
+                                <TextBlock Text="Page:" Grid.Row="3" Margin="0,0,8,0" />
+                                <TextBlock x:Name="TitleBlockPage" Grid.Row="3" Grid.Column="1" />
+                            </Grid>
+                        </Border>
+                    </local:SchematicCanvas>
+                </ScrollViewer>
+
+                <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" />
+
+                <TabControl x:Name="BottomTabs" Grid.Row="2">
+                    <TabItem x:Name="DevicesTab" Header="Devices">
+                        <DataGrid x:Name="DeviceGrid" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                                  CanUserAddRows="False" HeadersVisibility="Column" SelectionChanged="DeviceGrid_SelectionChanged">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Designation" Binding="{Binding Designation}" />
+                                <DataGridTextColumn Header="Symbol" Binding="{Binding Symbol.Name}" />
+                                <DataGridTextColumn Header="Category" Binding="{Binding Symbol.Category}" />
+                                <DataGridTextColumn Header="Page" Binding="{Binding Page}" />
+                                <DataGridTextColumn Header="Manufacturer" Binding="{Binding Manufacturer}" />
+                                <DataGridTextColumn Header="Article no." Binding="{Binding ArticleNumber}" />
+                                <DataGridTextColumn Header="Description" Binding="{Binding Description}" Width="*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </TabItem>
+                    <TabItem x:Name="MessagesTab" Header="Messages">
+                        <DockPanel>
+                            <Button x:Name="ClearMessagesButton" DockPanel.Dock="Top" HorizontalAlignment="Right" Content="Clear"
+                                    Padding="8,1" Margin="0,2" Click="ClearMessages_Click" />
+                            <ListBox x:Name="MessagesList" />
+                        </DockPanel>
+                    </TabItem>
+                </TabControl>
+            </Grid>
+
+            <GridSplitter Grid.Column="3" Width="4" HorizontalAlignment="Stretch" />
+
+            <!-- Right: properties and calculator -->
+            <ScrollViewer Grid.Column="4" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <GroupBox x:Name="PropertiesPanel" Header="Device properties" Margin="4">
+                        <StackPanel x:Name="PropertiesFields" IsEnabled="False" Margin="0,4,0,0">
+                            <Label Content="_Designation" Target="{Binding ElementName=DesignationInput}" />
+                            <TextBox x:Name="DesignationInput" />
+                            <Label Content="Symbol" />
+                            <TextBlock x:Name="SymbolNameText" Margin="5,0,0,0" />
+                            <Label Content="Descr_iption" Target="{Binding ElementName=DescriptionInput}" />
+                            <TextBox x:Name="DescriptionInput" />
+                            <Label Content="_Manufacturer" Target="{Binding ElementName=ManufacturerCombo}" />
+                            <ComboBox x:Name="ManufacturerCombo" />
+                            <Label Content="Article _no." Target="{Binding ElementName=ArticleNumberInput}" />
+                            <TextBox x:Name="ArticleNumberInput" />
+                            <TextBlock x:Name="PropertiesError" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,6,0,0" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                <Button x:Name="ApplyPropertiesButton" Content="_Apply" Padding="12,2" Click="ApplyProperties_Click"
+                                        IsDefault="{Binding IsKeyboardFocusWithin, ElementName=PropertiesPanel}" />
+                                <Button x:Name="DeleteDeviceButton" Content="Delete" Padding="12,2" Margin="6,0,0,0" Click="DeleteDevice_Click" />
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox x:Name="CalculatorPanel" Header="Ohm's law calculator" Margin="4">
+                        <StackPanel Margin="0,4,0,0">
+                            <Label Content="_Voltage (V)" Target="{Binding ElementName=VoltageInput}" />
+                            <TextBox x:Name="VoltageInput" />
+                            <Label Content="_Resistance (Ω)" Target="{Binding ElementName=ResistanceInput}" />
+                            <TextBox x:Name="ResistanceInput" />
+                            <Button x:Name="CalculateButton" Content="_Calculate" Margin="0,12,0,0" Click="Calculate_Click"
+                                    IsDefault="{Binding IsKeyboardFocusWithin, ElementName=CalculatorPanel}" />
+                            <TextBlock x:Name="ResultText" Margin="0,12,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

@@ -1,0 +1,11 @@
+# PR validation: fast feedback before merge.
+# Azure Repos Git ignores YAML `pr:` triggers. This pipeline is wired up as a
+# Build Validation branch policy on main and release/* instead.
+# UI tests are not run here: the interactive agent is a scarce resource, so they run in CI after merge.
+
+trigger: none
+
+pool: Windows-Build
+
+steps:
+  - template: templates/build-and-test.yml

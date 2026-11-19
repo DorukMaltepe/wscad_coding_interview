@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- Self-contained, so customers do not need the .NET Desktop Runtime installed. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DesktopApp.Core\DesktopApp.Core.csproj" />
+    <ProjectReference Include="..\DesktopApp.Storage\DesktopApp.Storage.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,14 @@
+<Project Sdk="WixToolset.Sdk/7.0.1">
+  <PropertyGroup>
+    <!-- WiX v7 requires accepting the OSMF EULA; revenue-generating companies must pay the
+         Open Source Maintenance Fee. Accepting it is a legal/procurement decision, not a dev one. -->
+    <AcceptEula>wix7</AcceptEula>
+    <InstallerPlatform>x64</InstallerPlatform>
+
+    <!-- The pipeline passes the published app folder and the build version; defaults are for local builds. -->
+    <AppDir Condition="'$(AppDir)' == ''">$(MSBuildThisFileDirectory)..\..\artifacts\app</AppDir>
+    <AppVersion Condition="'$(AppVersion)' == ''">1.0.0</AppVersion>
+    <DefineConstants>AppDir=$(AppDir);AppVersion=$(AppVersion)</DefineConstants>
+    <OutputName>DesktopApp-$(AppVersion)</OutputName>
+  </PropertyGroup>
+</Project>

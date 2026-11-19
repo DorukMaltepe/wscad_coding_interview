@@ -1,0 +1,19 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- UpgradeCode must never change: it ties every version together for major upgrades. -->
+  <Package Name="DesktopApp"
+           Manufacturer="Contoso"
+           Version="$(var.AppVersion)"
+           UpgradeCode="E78657E3-6E16-4A06-A699-B8E469E2843E">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="DesktopApp" />
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <!-- Harvests the whole published app folder, so new app files need no installer change. -->
+      <Files Include="$(var.AppDir)\**" Directory="INSTALLFOLDER" />
+    </Feature>
+  </Package>
+</Wix>
