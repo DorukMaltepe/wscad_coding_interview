@@ -1,0 +1,34 @@
+# Authenticode-signs files with Azure Trusted Signing through Microsoft's `sign` CLI.
+# The certificate never leaves Azure, and the agent holds no secret: AzureCLI@2 logs in through the
+# DesktopApp-CodeSigning service connection (workload identity federation), and `sign` reuses that login.
+# Signing also adds an RFC 3161 timestamp, so signatures stay valid after the certificate expires.
+
+parameters:
+  # Folder the files are in.
+  - name: folder
+    type: string
+  # Files or globs relative to the folder, separated by spaces. Sign only our own files: the .NET runtime files are already signed by Microsoft.
+  - name: files
+    type: string
+
+steps:
+  - script: dotnet tool install sign --version 1.1.5 --tool-path $(Agent.TempDirectory)/sign
+    displayName: Install sign tool
+
+  - task: AzureCLI@2
+    displayName: Sign ${{ parameters.files }}
+    inputs:
+      # Restrict this service connection to the CI pipeline and to main and release/* (branch control check).
+      azureSubscription: DesktopApp-CodeSigning
+      scriptType: ps
+      scriptLocation: inlineScript
+      # `trusted-signing` is called `artifact-signing` in newer versions of the tool.
+      inlineScript: >-
+        & "$(Agent.TempDirectory)/sign/sign.exe" code trusted-signing
+        --trusted-signing-endpoint https://weu.codesigning.azure.net
+        --trusted-signing-account desktopapp-signing
+        --trusted-signing-certificate-profile desktopapp-public
+        --azure-credential-type azure-cli
+        --base-directory "${{ parameters.folder }}"
+        ${{ parameters.files }};
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

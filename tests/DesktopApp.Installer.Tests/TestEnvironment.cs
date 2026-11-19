@@ -66,6 +66,7 @@ internal static class TestEnvironment
         {
             var startInfo = new ProcessStartInfo(exe) { UseShellExecute = false };
             startInfo.Environment["DESKTOPAPP_DATA_DIR"] = dataDir;
+            startInfo.Environment["DESKTOPAPP_TELEMETRY_OPTOUT"] = "1"; // Keep test runs out of production telemetry.
             using var app = Process.Start(startInfo)!;
             try
             {

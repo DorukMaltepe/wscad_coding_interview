@@ -13,7 +13,10 @@ trigger:
 pr: none
 
 variables:
-  majorMinor: '1.0'
+  - name: majorMinor
+    value: '1.0'
+  # AppInsightsConnectionString: the `connectionString` output of monitoring/main.bicep.
+  - group: DesktopApp-Telemetry
 
 stages:
   - stage: Build
@@ -25,9 +28,17 @@ stages:
           - template: templates/build-and-test.yml
             parameters:
               version: $(Build.BuildNumber)
+              appInsightsConnectionString: $(AppInsightsConnectionString)
+              codeAnalysis: true
 
           - script: dotnet publish src/DesktopApp/DesktopApp.csproj --no-build -c Release -o $(Build.ArtifactStagingDirectory)/app
             displayName: Publish app
+
+          # Signed before the artifact exists, so UI tests, the MSI and the installer tests all use the signed binaries.
+          - template: templates/sign.yml
+            parameters:
+              folder: $(Build.ArtifactStagingDirectory)/app
+              files: DesktopApp.exe DesktopApp*.dll
 
           - publish: $(Build.ArtifactStagingDirectory)/app
             artifact: app
@@ -110,6 +121,12 @@ stages:
               -p:AppVersion=$(Build.BuildNumber)
               -o $(Build.ArtifactStagingDirectory)/installer
             displayName: Build MSI from app artifact
+
+          # Signed MSI: no "unknown publisher" UAC prompt, and SmartScreen reputation builds up.
+          - template: templates/sign.yml
+            parameters:
+              folder: $(Build.ArtifactStagingDirectory)/installer
+              files: '*.msi'
 
           - publish: $(Build.ArtifactStagingDirectory)/installer
             artifact: installer

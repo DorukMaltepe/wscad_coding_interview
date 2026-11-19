@@ -29,7 +29,7 @@ Every control has an `x:Name`, and WPF uses it as the UI Automation id. Placed d
 | [src/DesktopApp](src/DesktopApp) | WPF UI (`net10.0-windows`), published self-contained for `win-x64`. |
 | [tests/DesktopApp.Core.Tests](tests/DesktopApp.Core.Tests) | Unit tests (NUnit), one class at a time. |
 | [tests/DesktopApp.IntegrationTests](tests/DesktopApp.IntegrationTests) | Integration tests: storage and crash log against the real file system (including locked, read-only and corrupt files), and editor workflows across `Project`, `SymbolLibrary` and `Designation`. |
-| [tests/DesktopApp.UITests](tests/DesktopApp.UITests) | UI and app tests that drive the published `DesktopApp.exe` through UI Automation (FlaUI). These cover editor features, startup, restart, bad saved data, bad input and crash handling. Every test fails if the app crashed or did not exit cleanly. |
+| [tests/DesktopApp.UITests](tests/DesktopApp.UITests) | UI and app tests that drive the published `DesktopApp.exe` through UI Automation (FlaUI). These cover editor features, startup, restart, bad saved data, bad input, crash handling, and telemetry with a malformed or unreachable endpoint. Every test fails if the app crashed or did not exit cleanly. |
 | [tests/DesktopApp.Installer.Tests](tests/DesktopApp.Installer.Tests) | Installer tests: the MSI's tables, its extracted files compared with the published app, and a real install, repair and uninstall cycle (admin only). |
 | [installer/DesktopApp.Installer](installer/DesktopApp.Installer) | WiX v7 MSI. It harvests the published app folder. It is not part of the solution. |
 | [pipelines](pipelines) | Azure Pipelines YAML for PR, CI and release. |
@@ -103,13 +103,68 @@ CI run on release/* ──► release.yml   approval on DesktopApp-Production �
 - **[release.yml](pipelines/release.yml)**: It is triggered by a successful CI run on `release/*`. Nothing is rebuilt: the tested installer is published as a universal package to the `DesktopApp/desktop-releases` feed. Approvals are configured on the `DesktopApp-Production` environment.
 - **[templates/build-and-test.yml](pipelines/templates/build-and-test.yml)**: These are the restore, build, unit test and integration test steps. PR and CI share them, so a PR is checked the same way that main is built.
 
+### Quality checks
+
+- **Warnings are errors.** The pipeline builds with `-warnaserror`, so any compiler or .NET analyzer warning fails the PR. Local builds stay lenient.
+- **Code coverage.** The unit and integration tests run with [coverage.runsettings](coverage.runsettings), which uses Microsoft.CodeCoverage (already part of `Microsoft.NET.Test.Sdk`) and leaves the test assemblies out of the numbers. Results appear on the run's *Code Coverage* tab.
+- **Diff coverage on PRs.** [azurepipelines-coverage.yml](azurepipelines-coverage.yml) makes Azure Repos post a `codecoverage` status that requires 70 % of the changed lines to be covered. To block merges below that, make the status required in the branch policy.
+
+### Security checks
+
+- **Vulnerable packages.** Restore runs with `-warnaserror`, so NuGet audit fails the PR if any direct or transitive package has a known advisory (NU1901–NU1904). Run `dotnet list package --vulnerable --include-transitive` to see the details.
+- **Static analysis (SAST).** CI runs CodeQL for C# around the build (`codeAnalysis: true`). Findings appear under *Repos → Advanced Security*. PRs skip it to keep them fast.
+- **Secrets.** Turn on secret scanning with push protection in the repo's Advanced Security settings, so a committed key is blocked before it reaches the server. There is no pipeline step for this.
+
+Both CodeQL and secret scanning need GitHub Advanced Security for Azure DevOps enabled on the repo. NuGet audit needs nothing extra.
+
+### Code signing
+
+CI signs twice with [templates/sign.yml](pipelines/templates/sign.yml), which runs Microsoft's `sign` CLI against Azure Trusted Signing:
+
+1. **App binaries** (`DesktopApp.exe`, `DesktopApp*.dll`) right after `dotnet publish`, before the `app` artifact is published. The UI tests, the MSI and the installer payload tests all see the signed files. The .NET runtime files in the self-contained output are already signed by Microsoft and are left alone.
+2. **The MSI**, right after it is built and before the installer tests. Release publishes exactly this signed MSI.
+
+The private key stays in Azure and the agent holds no secret: the `DesktopApp-CodeSigning` service connection uses workload identity federation. Signatures are timestamped, so they stay valid after the certificate expires. PR builds never sign, so code that has not been reviewed is never signed.
+
 ### Azure DevOps setup required
 
 - Agent pools `Windows-Build` and `Windows-UI-Interactive`. Configure the UI agent with `--runAsAutoLogon`. Its account must be a local administrator, because the installer tests install into Program Files. Use a disposable or regularly reset machine.
 - A pipeline named `DesktopApp-CI` created from `ci.yml`, because `release.yml` refers to it by that name.
-- A Build Validation policy that runs `pr.yml` on `main` and `release/*`.
+- A Build Validation policy that runs `pr.yml` on `main` and `release/*`. Optionally, also a required status policy for `codecoverage`.
 - An environment named `DesktopApp-Production` that has the approvals you want.
+- GitHub Advanced Security for Azure DevOps enabled on the repo (CodeQL and secret scanning).
+- An Azure Trusted Signing account `desktopapp-signing` with certificate profile `desktopapp-public`, plus an Azure Resource Manager service connection `DesktopApp-CodeSigning` (workload identity federation) whose identity has the *Trusted Signing Certificate Profile Signer* role. Allow only `DesktopApp-CI` to use the connection, and add a branch control check for `main` and `release/*`.
 - The universal package feed `DesktopApp/desktop-releases`.
+- A variable group `DesktopApp-Telemetry` with `AppInsightsConnectionString` (see [Telemetry](#telemetry-application-insights)).
+
+## Telemetry (Application Insights)
+
+The app sends telemetry to Azure Application Insights through OpenTelemetry and the Azure Monitor exporter ([Telemetry.cs](src/DesktopApp/Telemetry.cs)). If it is offline, telemetry is kept on disk and sent on a later start.
+
+| What | Where in App Insights |
+|------|-----------------------|
+| Crashes (unhandled exceptions, with stack trace) | `exceptions`, `severityLevel == 4` |
+| Handled errors (e.g. the last circuit could not be saved), error type only | `traces`, `severityLevel == 2` |
+| `SessionStarted` (app version, OS, .NET, CPU count, RAM) and `SessionEnded` (exit code, duration) | `customEvents` |
+| `FeatureRequested`: someone used a feature that is not implemented | `customEvents` |
+| CPU % (`desktopapp.process.cpu.percent`), startup time, devices placed per symbol | `customMetrics` |
+| .NET runtime: working set, GC, heap, thread pool, lock contention, exceptions (`dotnet.*`) | `customMetrics` |
+
+Every run gets a random session id as `cloud_RoleInstance`. The machine name is not sent, and neither are project or customer names. Handled errors send only the error type. Crashes send the full exception, because the stack trace is needed to fix them. A crash message can contain a local file path, and with it the Windows user name. Say so in the privacy statement.
+
+**Turning it on.** Telemetry is off unless there is a connection string:
+- `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable (wins), or
+- built in: the MSBuild property `AppInsightsConnectionString`. CI sets it from the `DesktopApp-Telemetry` variable group.
+
+`DESKTOPAPP_TELEMETRY_OPTOUT=1` (or `true`, any case) turns it off. The UI and installer tests set it, so test runs and simulated crashes never reach production data. The exception is [TelemetryTests](tests/DesktopApp.UITests/TelemetryTests.cs): it turns telemetry on against a malformed connection string and against a localhost port that refuses connections. It checks that the app still starts, exits cleanly and logs crashes, and that unsent data is kept on disk.
+
+**Azure side.** [monitoring/main.bicep](monitoring/main.bicep) creates a Log Analytics workspace, Application Insights and a **DesktopApp health** workbook. The workbook shows sessions, crash-free sessions per version, crashes, top errors, CPU, memory, startup time, versions/OS, requested features and symbol usage. Pin any tile to an Azure dashboard.
+
+```powershell
+az deployment group create -g <resource-group> -f monitoring/main.bicep --query properties.outputs.connectionString.value
+```
+
+Put the output into the `AppInsightsConnectionString` variable of a variable group named `DesktopApp-Telemetry` (CI needs that group). To try it locally, set `APPLICATIONINSIGHTS_CONNECTION_STRING` and run the app.
 
 ## NuGet feed
 

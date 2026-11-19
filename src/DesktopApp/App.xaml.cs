@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using DesktopApp.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace DesktopApp;
 
@@ -14,21 +15,34 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        Telemetry.Start();
         DispatcherUnhandledException += (_, args) =>
         {
             args.Handled = true;
+            Telemetry.Log.LogCritical(args.Exception, "Unhandled exception on the UI thread");
             MessageBox.Show($"DesktopApp hit an unexpected error and has to close.\n\n{args.Exception.Message}\n\nDetails: {WriteCrashLog(args.Exception)}",
                 "DesktopApp error", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         };
         // Background-thread crashes end the process anyway; log them first.
-        AppDomain.CurrentDomain.UnhandledException += (_, args) => WriteCrashLog((Exception)args.ExceptionObject);
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            WriteCrashLog((Exception)args.ExceptionObject);
+            Telemetry.Log.LogCritical((Exception)args.ExceptionObject, "Unhandled exception on a background thread");
+            Telemetry.Stop(exitCode: -1); // Flush now: the process dies right after this handler.
+        };
 
         base.OnStartup(e);
 
         // Lets tests prove that crashes are caught, logged and reported.
         if (e.Args.Contains("--simulate-crash"))
             Dispatcher.BeginInvoke(new Action(() => throw new InvalidOperationException("Simulated crash (--simulate-crash).")));
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        Telemetry.Stop(e.ApplicationExitCode);
+        base.OnExit(e);
     }
 
     private static string WriteCrashLog(Exception exception)

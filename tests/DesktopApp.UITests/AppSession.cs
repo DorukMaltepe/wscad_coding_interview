@@ -18,7 +18,8 @@ public sealed class AppSession : IDisposable
     private Window? _window;
 
     /// <param name="dataDir">An existing folder to reuse (e.g. across a restart), or null for a fresh temp folder.</param>
-    public AppSession(string? dataDir = null, string arguments = "")
+    /// <param name="environment">Extra environment variables for the app; they override the defaults below.</param>
+    public AppSession(string? dataDir = null, string arguments = "", IReadOnlyDictionary<string, string>? environment = null)
     {
         var exe = Environment.GetEnvironmentVariable("DESKTOPAPP_EXE")
             ?? throw new InvalidOperationException("Set DESKTOPAPP_EXE to the path of DesktopApp.exe.");
@@ -28,6 +29,9 @@ public sealed class AppSession : IDisposable
 
         var startInfo = new ProcessStartInfo(exe, arguments) { UseShellExecute = false };
         startInfo.Environment["DESKTOPAPP_DATA_DIR"] = DataDir;
+        startInfo.Environment["DESKTOPAPP_TELEMETRY_OPTOUT"] = "1"; // Test runs and simulated crashes must not reach production telemetry.
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+            startInfo.Environment[name] = value;
         // Started here, not by Application.Launch, so the exit code can be read afterwards.
         _process = Process.Start(startInfo) ?? throw new InvalidOperationException("DesktopApp did not start.");
         App = Application.Attach(_process.Id); // By id: FlaUI disposes a Process object it is given.

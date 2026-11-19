@@ -8,6 +8,9 @@
     <SelfContained>true</SelfContained>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Application Insights target for shipped builds; CI sets it from the DesktopApp-Telemetry variable group. Empty = telemetry off. -->
+    <AssemblyMetadata Include="AppInsightsConnectionString" Value="$(AppInsightsConnectionString)" Condition="'$(AppInsightsConnectionString)' != ''" />
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.Exporter" />
     <ProjectReference Include="..\DesktopApp.Core\DesktopApp.Core.csproj" />
     <ProjectReference Include="..\DesktopApp.Storage\DesktopApp.Storage.csproj" />
   </ItemGroup>

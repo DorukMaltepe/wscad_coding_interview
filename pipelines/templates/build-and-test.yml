@@ -5,6 +5,14 @@ parameters:
   - name: version
     type: string
     default: '1.0.0'
+  # Baked into the app so shipped builds report to Application Insights. Empty (PR builds) = telemetry off.
+  - name: appInsightsConnectionString
+    type: string
+    default: ''
+  # CodeQL static analysis (GitHub Advanced Security for Azure DevOps). Slow, so CI turns it on and PRs skip it.
+  - name: codeAnalysis
+    type: boolean
+    default: false
 
 steps:
   - checkout: self
@@ -24,17 +32,41 @@ steps:
   - task: NuGetAuthenticate@1
     displayName: Authenticate to Azure Artifacts feed
 
-  - script: dotnet restore DesktopApp.slnx
-    displayName: Restore
+  # Security gate: NuGet audit checks every direct and transitive package against the GitHub Advisory Database.
+  # -warnaserror turns a known vulnerability (NU1901-NU1904) into a failed restore.
+  - script: dotnet restore DesktopApp.slnx -warnaserror
+    displayName: Restore and audit packages
 
-  - script: dotnet build DesktopApp.slnx --no-restore -c Release -p:Version=${{ parameters.version }}
+  # Must start before the build, which it traces to see the C# code.
+  - ${{ if parameters.codeAnalysis }}:
+      - task: AdvancedSecurity-Codeql-Init@1
+        displayName: Initialize CodeQL
+        inputs:
+          languages: csharp
+
+  # Quality gate: a compiler or analyzer warning fails the build, so warnings cannot pile up on main.
+  - script: dotnet build DesktopApp.slnx --no-restore -c Release -warnaserror -p:Version=${{ parameters.version }}
     displayName: Build
+    env:
+      # Passed as an environment variable, which MSBuild reads as a property: -p: would split the value at its semicolons.
+      AppInsightsConnectionString: ${{ parameters.appInsightsConnectionString }}
 
-  - script: dotnet test tests/DesktopApp.Core.Tests --no-build -c Release --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+  # Findings go to the repo's Advanced Security tab.
+  - ${{ if parameters.codeAnalysis }}:
+      - task: AdvancedSecurity-Codeql-Analyze@1
+        displayName: Run CodeQL analysis
+
+  - script: dotnet test tests/DesktopApp.Core.Tests --no-build -c Release --settings coverage.runsettings --logger trx --results-directory $(Agent.TempDirectory)/TestResults
     displayName: Unit tests
 
-  - script: dotnet test tests/DesktopApp.IntegrationTests --no-build -c Release --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+  - script: dotnet test tests/DesktopApp.IntegrationTests --no-build -c Release --settings coverage.runsettings --logger trx --results-directory $(Agent.TempDirectory)/TestResults
     displayName: Integration tests
+
+  # Shows coverage on the run's Code Coverage tab. On PRs, azurepipelines-coverage.yml turns it into a diff-coverage status check.
+  - task: PublishCodeCoverageResults@2
+    displayName: Publish code coverage
+    inputs:
+      summaryFileLocation: $(Agent.TempDirectory)/TestResults/**/*.cobertura.xml
 
   - task: PublishTestResults@2
     displayName: Publish test results

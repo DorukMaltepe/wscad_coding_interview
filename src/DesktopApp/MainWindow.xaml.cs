@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using DesktopApp.Core;
 using DesktopApp.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace DesktopApp;
 
@@ -39,6 +40,12 @@ public partial class MainWindow : Window
             VoltageInput.Text = last.Voltage.ToString(CultureInfo.CurrentCulture);
             ResistanceInput.Text = last.Resistance.ToString(CultureInfo.CurrentCulture);
         }
+    }
+
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        Telemetry.StartupDuration.Record((DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds);
     }
 
     // ---- Project and pages ----
@@ -152,6 +159,7 @@ public partial class MainWindow : Window
     private void PlaceDevice(Symbol symbol, double x, double y)
     {
         var device = _project.Place(symbol, _currentPage, x, y);
+        Telemetry.DevicesPlaced.Add(1, new KeyValuePair<string, object?>("symbol", symbol.Name));
         Log($"Placed {device.Designation} ({symbol.Name}) on {_currentPage}.");
         Select(device);
     }
@@ -307,6 +315,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // Type only: the message holds the file path, which contains the Windows user name.
+            Telemetry.Log.LogWarning("Could not save the last circuit: {Error}", ex.GetType().Name);
             Log($"Could not remember the values: {ex.Message}");
         }
     }
@@ -315,7 +325,11 @@ public partial class MainWindow : Window
 
     private void NotAvailable_Executed(object sender, ExecutedRoutedEventArgs e) => NotAvailable(((RoutedUICommand)e.Command).Text);
     private void NotAvailable_Click(object sender, RoutedEventArgs e) => NotAvailable((string)((FrameworkElement)sender).Tag);
-    private void NotAvailable(string feature) => Log($"{feature} is not available in this version.");
+    private void NotAvailable(string feature)
+    {
+        Telemetry.Event("FeatureRequested", feature); // Shows which missing features users try to use.
+        Log($"{feature} is not available in this version.");
+    }
 
     private void Log(string message)
     {
