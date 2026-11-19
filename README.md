@@ -4,6 +4,8 @@ A small WPF desktop app (a demo electrical schematic editor) with a complete Azu
 
 The app is a shell, not a real CAD tool. Its UI exists so that there is something realistic to automate. The repo is about how a Windows desktop product gets built, tested, packaged and released.
 
+The design and its trade-offs are explained in [CONCEPT.md](CONCEPT.md).
+
 ## What the app does
 
 - **Project explorer**: a page tree. You can add and remove pages. Removing a page that has devices on it asks you to confirm first.
