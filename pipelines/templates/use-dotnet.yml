@@ -1,0 +1,14 @@
+# The same .NET toolchain on every agent: the SDK pinned in global.json (so the job needs global.json checked out),
+# plus the .NET 10 runtime the test projects target.
+
+steps:
+  - task: UseDotNet@2
+    displayName: Use .NET SDK from global.json
+    inputs:
+      useGlobalJson: true
+
+  - task: UseDotNet@2
+    displayName: Use .NET 10 runtime (test target)
+    inputs:
+      packageType: runtime
+      version: 10.0.x

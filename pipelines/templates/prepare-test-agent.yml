@@ -1,0 +1,14 @@
+# Prepares the shared interactive test agent. Tests run from artifacts, so only global.json (toolchain version)
+# and the pipeline scripts are checked out. The reset runs first because a cancelled or timed-out job
+# skips the tests' own cleanup.
+
+steps:
+  - checkout: self
+    fetchDepth: 1
+    sparseCheckoutPatterns: /global.json /pipelines/scripts/
+
+  - powershell: >-
+      & '$(Build.SourcesDirectory)/pipelines/scripts/Reset-TestAgent.ps1'
+    displayName: Reset test agent (stop DesktopApp, remove leftover installs)
+
+  - template: use-dotnet.yml

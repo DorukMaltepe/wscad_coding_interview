@@ -1,5 +1,5 @@
 # CI: build once, run every test level, build the installer, test the installer, publish artifacts.
-# Runs after each merge to main or release/*. Successful runs from release/* feed release.yml.
+# Runs after each merge to main. Every run that fully succeeds is a release candidate for release.yml.
 
 name: $(majorMinor).$(Rev:r) # Becomes the app and MSI version, e.g. 1.0.42.
 
@@ -8,7 +8,11 @@ trigger:
   branches:
     include:
       - main
-      - release/*
+  # Changes that cannot affect the product don't spend UI agent time or signing operations.
+  paths:
+    exclude:
+      - '**/*.md'
+      - monitoring
 
 pr: none
 
@@ -31,8 +35,14 @@ stages:
               appInsightsConnectionString: $(AppInsightsConnectionString)
               codeAnalysis: true
 
-          - script: dotnet publish src/DesktopApp/DesktopApp.csproj --no-build -c Release -o $(Build.ArtifactStagingDirectory)/app
-            displayName: Publish app
+          # PDBs stay out of the MSI; crash dumps from customers are resolved against the symbol server instead.
+          - task: PublishSymbols@2
+            displayName: Publish symbols
+            inputs:
+              SymbolsFolder: $(Build.SourcesDirectory)/src
+              SearchPattern: '**/bin/Release/**/DesktopApp*.pdb'
+              SymbolServerType: TeamServices
+              IndexSources: false # Portable PDBs; the SDK embeds Source Link instead.
 
           # Signed before the artifact exists, so UI tests, the MSI and the installer tests all use the signed binaries.
           - template: templates/sign.yml
@@ -60,8 +70,11 @@ stages:
     pool: Windows-UI-Interactive
     jobs:
       - job: UITests
+        timeoutInMinutes: 30 # The agent is scarce: a hung run must not block it for the default 60 minutes.
+        workspace:
+          clean: all # No artifacts left over from an earlier run.
         steps:
-          - checkout: none
+          - template: templates/prepare-test-agent.yml
 
           - download: current
             artifact: app
@@ -69,15 +82,13 @@ stages:
           - download: current
             artifact: uitests
 
-          # No checkout here, so no global.json; SDK 10 also brings the net10.0 runtime the UI tests need.
-          - task: UseDotNet@2
-            displayName: Use .NET 10 SDK
-            inputs:
-              version: 10.0.x
-
           # Tests the exact binaries that go into the installer, not a rebuild.
           # UI tests and app lifecycle/crash tests (startup, saved data, bad input, crash logging).
-          - script: dotnet test $(Pipeline.Workspace)/uitests/DesktopApp.UITests.dll --logger trx --results-directory $(Agent.TempDirectory)/TestResults
+          # A failed test gets a screenshot and the crash log attached; a hung test gets a dump.
+          - script: >-
+              dotnet test $(Pipeline.Workspace)/uitests/DesktopApp.UITests.dll
+              --blame-hang-timeout 5m
+              --logger trx --results-directory $(Agent.TempDirectory)/TestResults
             displayName: Run UI and app tests
             env:
               DESKTOPAPP_EXE: $(Pipeline.Workspace)/app/DesktopApp.exe
@@ -107,20 +118,16 @@ stages:
           - download: current
             artifact: app
 
-          - task: UseDotNet@2
-            displayName: Use .NET SDK from global.json
-            inputs:
-              useGlobalJson: true
+          - template: templates/use-dotnet.yml
 
           - task: NuGetAuthenticate@1
             displayName: Authenticate to Azure Artifacts feed
 
-          - script: >-
-              dotnet build installer/DesktopApp.Installer/DesktopApp.Installer.wixproj -c Release
-              -p:AppDir=$(Pipeline.Workspace)/app
-              -p:AppVersion=$(Build.BuildNumber)
-              -o $(Build.ArtifactStagingDirectory)/installer
-            displayName: Build MSI from app artifact
+          - template: templates/installer.yml
+            parameters:
+              appDir: $(Pipeline.Workspace)/app
+              version: $(Build.BuildNumber)
+              outputDir: $(Build.ArtifactStagingDirectory)/installer
 
           # Signed MSI: no "unknown publisher" UAC prompt, and SmartScreen reputation builds up.
           - template: templates/sign.yml
@@ -140,8 +147,11 @@ stages:
     pool: Windows-UI-Interactive
     jobs:
       - job: InstallerTests
+        timeoutInMinutes: 30
+        workspace:
+          clean: all # Stale files next to the app artifact would break the exact payload comparison.
         steps:
-          - checkout: none
+          - template: templates/prepare-test-agent.yml
 
           - download: current
             artifact: installer
@@ -152,12 +162,8 @@ stages:
           - download: current
             artifact: installertests
 
-          - task: UseDotNet@2
-            displayName: Use .NET 10 SDK
-            inputs:
-              version: 10.0.x
-
-          # Tests the exact MSI that release.yml will publish. A failure here fails the CI run, so it is never released.
+          # Tests the exact MSI that release.yml will publish. A failure here fails the CI run, and release.yml
+          # refuses any run whose InstallerTests stage did not succeed. A failed install test gets its full msiexec logs attached.
           - script: dotnet test $(Pipeline.Workspace)/installertests/DesktopApp.Installer.Tests.dll --logger trx --results-directory $(Agent.TempDirectory)/TestResults
             displayName: Run installer tests
             env:

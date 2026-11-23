@@ -1,4 +1,4 @@
-# Restore, build, unit and integration tests.
+# Restore, build, unit and integration tests, then publish the app to $(Build.ArtifactStagingDirectory)/app.
 # Shared by PR validation and CI, so a PR is checked exactly the way main is built.
 
 parameters:
@@ -18,16 +18,7 @@ steps:
   - checkout: self
     clean: true
 
-  - task: UseDotNet@2
-    displayName: Use .NET SDK from global.json
-    inputs:
-      useGlobalJson: true
-
-  - task: UseDotNet@2
-    displayName: Use .NET 10 runtime (test target)
-    inputs:
-      packageType: runtime
-      version: 10.0.x
+  - template: use-dotnet.yml
 
   - task: NuGetAuthenticate@1
     displayName: Authenticate to Azure Artifacts feed
@@ -51,6 +42,10 @@ steps:
       # Passed as an environment variable, which MSBuild reads as a property: -p: would split the value at its semicolons.
       AppInsightsConnectionString: ${{ parameters.appInsightsConnectionString }}
 
+  # Lets the integration tests run after failed unit tests, but not after a failed build.
+  - script: echo ##vso[task.setvariable variable=buildSucceeded]true
+    displayName: Mark build as succeeded
+
   # Findings go to the repo's Advanced Security tab.
   - ${{ if parameters.codeAnalysis }}:
       - task: AdvancedSecurity-Codeql-Analyze@1
@@ -61,6 +56,7 @@ steps:
 
   - script: dotnet test tests/DesktopApp.IntegrationTests --no-build -c Release --settings coverage.runsettings --logger trx --results-directory $(Agent.TempDirectory)/TestResults
     displayName: Integration tests
+    condition: and(succeededOrFailed(), eq(variables.buildSucceeded, 'true')) # A unit test failure must not hide these results.
 
   # Shows coverage on the run's Code Coverage tab. On PRs, azurepipelines-coverage.yml turns it into a diff-coverage status check.
   - task: PublishCodeCoverageResults@2
@@ -76,3 +72,7 @@ steps:
       testResultsFiles: '**/*.trx'
       searchFolder: $(Agent.TempDirectory)/TestResults
       testRunTitle: Unit and integration tests
+
+  # The customer payload. No PDBs (see DesktopApp.csproj); CI sends them to the symbol server.
+  - script: dotnet publish src/DesktopApp/DesktopApp.csproj --no-build -c Release -o $(Build.ArtifactStagingDirectory)/app
+    displayName: Publish app

@@ -18,7 +18,7 @@ steps:
   - task: AzureCLI@2
     displayName: Sign ${{ parameters.files }}
     inputs:
-      # Restrict this service connection to the CI pipeline and to main and release/* (branch control check).
+      # Restrict this service connection to the CI pipeline and to main (branch control check).
       azureSubscription: DesktopApp-CodeSigning
       scriptType: ps
       scriptLocation: inlineScript
@@ -32,3 +32,9 @@ steps:
         --base-directory "${{ parameters.folder }}"
         ${{ parameters.files }};
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # Fail here, not at release time, if a file came out unsigned, untimestamped or signed by the wrong certificate.
+  - powershell: >-
+      & '$(Build.SourcesDirectory)/pipelines/scripts/Assert-Signed.ps1'
+      -Folder '${{ parameters.folder }}' -Files '${{ parameters.files }}'
+    displayName: Verify signatures of ${{ parameters.files }}

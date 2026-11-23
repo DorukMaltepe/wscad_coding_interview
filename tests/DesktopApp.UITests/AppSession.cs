@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Capturing;
 using FlaUI.Core.Tools;
 using FlaUI.UIA3;
 
@@ -16,6 +17,7 @@ public sealed class AppSession : IDisposable
     private readonly bool _ownsDataDir;
     private readonly Process _process;
     private Window? _window;
+    private bool _screenshotSaved;
 
     /// <param name="dataDir">An existing folder to reuse (e.g. across a restart), or null for a fresh temp folder.</param>
     /// <param name="environment">Extra environment variables for the app; they override the defaults below.</param>
@@ -75,14 +77,44 @@ public sealed class AppSession : IDisposable
     /// <summary>Crash detection: fails unless the app is still running, closes with exit code 0 and logged no crash.</summary>
     public void CloseAndAssertHealthy()
     {
+        SaveDiagnostics(); // While the app is still on screen.
         Assert.That(_process.HasExited, Is.False, $"DesktopApp exited during the test. Crash log:\n{CrashLog}");
         App.Close(); // Kills the app if it ignores the close request, e.g. because a dialog is still open.
         Assert.That(WaitForExit(), Is.EqualTo(0), "DesktopApp did not exit cleanly.");
         Assert.That(CrashLog, Is.Null, "DesktopApp logged a crash.");
     }
 
+    /// <summary>
+    /// Saves a screenshot (once per session) and the crash log to the current test's diagnostics folder.
+    /// AttachDiagnosticsOnFailure attaches them if the test fails and deletes them if it passes.
+    /// </summary>
+    private void SaveDiagnostics()
+    {
+        try
+        {
+            var folder = Directory.CreateDirectory(AttachDiagnosticsOnFailureAttribute.Folder).FullName;
+            var prefix = Path.Combine(folder, $"session-{_process.Id}");
+            if (!_screenshotSaved)
+            {
+                // The screen capture shows whatever is on top, so bring the app (and its open dialogs) to the front first.
+                if (!_process.HasExited)
+                    (_window ?? App.GetMainWindow(Automation, TimeSpan.FromSeconds(1)))?.SetForeground();
+                using var screen = Capture.Screen();
+                screen.ToFile($"{prefix}-screen.png");
+                _screenshotSaved = true;
+            }
+            if (CrashLog is { } crashLog)
+                File.WriteAllText($"{prefix}-crash.log", crashLog);
+        }
+        catch (Exception ex) // Diagnostics must never change a test's outcome.
+        {
+            TestContext.Progress.WriteLine($"Could not save diagnostics: {ex.Message}");
+        }
+    }
+
     public void Dispose()
     {
+        SaveDiagnostics(); // Covers tests that failed before CloseAndAssertHealthy, and crash logs written on exit.
         if (!_process.HasExited)
             _process.Kill();
         App.Dispose();

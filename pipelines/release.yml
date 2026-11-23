@@ -1,5 +1,9 @@
-# Release: promotes the installer from a successful CI run on release/*.
-# Nothing is rebuilt: the exact binaries that passed every test are released.
+# Release: promotes one CI run of main through the deployment environments. Nothing is rebuilt.
+# Verify proves the run is deployable before anyone is asked to approve it:
+#   - it was built from main and finished with result "succeeded",
+#   - every build and test stage ran and passed (unit, integration, UI and installer tests),
+#   - the app binaries and the MSI carry a valid, timestamped signature from our publisher.
+# Each environment then deploys in order, gated by the checks on its Azure DevOps environment (see README).
 
 trigger: none
 pr: none
@@ -11,30 +15,51 @@ resources:
       trigger:
         branches:
           include:
-            - release/*
+            - main
+
+variables:
+  # Branches whose CI runs may be deployed. Widen it only together with the environments' branch control checks.
+  deployableBranches: refs/heads/main
 
 stages:
-  - stage: Release
-    displayName: Publish release package
+  - stage: Verify
+    displayName: Verify release candidate
+    pool: Windows-Build
     jobs:
-      - deployment: PublishInstaller
-        displayName: Publish installer to release feed
-        pool: Windows-Build
-        # Approvals and checks (e.g. release manager sign-off) are configured on this environment in Azure DevOps.
-        environment: DesktopApp-Production
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - download: ci
-                  artifact: installer
+      - job: Verify
+        displayName: Verify CI run $(resources.pipeline.ci.runName)
+        steps:
+          - checkout: self
 
-                - task: UniversalPackages@1
-                  displayName: Publish installer as universal package
-                  inputs:
-                    command: publish
-                    feed: DesktopApp/desktop-releases
-                    packageName: desktopapp-installer
-                    packageVersion: $(resources.pipeline.ci.runName)
-                    directory: $(Pipeline.Workspace)/ci/installer
-                    packageDescription: DesktopApp installer $(resources.pipeline.ci.runName)
+          - download: ci
+            artifact: app
+            patterns: 'DesktopApp*'
+
+          - download: ci
+            artifact: installer
+            patterns: '*.msi'
+
+          # Uses the API, not the trigger: a manual run can pick any CI run, including one from another branch or a failed one.
+          - powershell: >-
+              & '$(Build.SourcesDirectory)/pipelines/scripts/Assert-ReleaseCandidate.ps1'
+              -RunId $(resources.pipeline.ci.runID) -Branches $(deployableBranches)
+            displayName: Check branch, result and test stages of the CI run
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+          - powershell: |
+              & '$(Build.SourcesDirectory)/pipelines/scripts/Assert-Signed.ps1' -Folder '$(Pipeline.Workspace)/ci/app' -Files 'DesktopApp.exe DesktopApp*.dll'
+              & '$(Build.SourcesDirectory)/pipelines/scripts/Assert-Signed.ps1' -Folder '$(Pipeline.Workspace)/ci/installer' -Files '*.msi'
+            displayName: Check signatures of app and MSI
+
+  # Promotion order: each stage waits for the one above it. To add environments, put them before Production, e.g.
+  #   - template: templates/deploy.yml
+  #     parameters: { name: Test, environment: DesktopApp-Test, feed: DesktopApp/desktop-test }
+  #   - template: templates/deploy.yml
+  #     parameters: { name: PrP, environment: DesktopApp-PrP, feed: DesktopApp/desktop-prp }
+  - template: templates/deploy.yml
+    parameters:
+      name: Production
+      environment: DesktopApp-Production
+      feed: DesktopApp/desktop-releases
+      tagRelease: true

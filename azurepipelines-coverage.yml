@@ -1,5 +1,5 @@
 # Azure Repos pull request coverage status: lines changed in a PR must be covered by unit or integration tests.
-# Make the "codecoverage" status required in the main and release/* branch policies to block merging below the target.
+# Make the "codecoverage" status required in the main branch policy to block merging below the target.
 coverage:
   status:
     comments: on

@@ -28,7 +28,7 @@ Every control has an `x:Name`, and WPF uses it as the UI Automation id. Placed d
 |------|----------|
 | [src/DesktopApp.Core](src/DesktopApp.Core) | Domain logic (`OhmsLaw`, `Circuit`, `Project`, `Symbol`, `Device`, `Designation`). Plain `net10.0`, no UI. |
 | [src/DesktopApp.Storage](src/DesktopApp.Storage) | `CircuitStore`, which saves the last circuit as JSON (a corrupt or locked file is ignored, not fatal), and `CrashLog`. |
-| [src/DesktopApp](src/DesktopApp) | WPF UI (`net10.0-windows`), published self-contained for `win-x64`. |
+| [src/DesktopApp](src/DesktopApp) | WPF UI (`net10.0-windows`), published self-contained for `win-x64`, without PDBs. |
 | [tests/DesktopApp.Core.Tests](tests/DesktopApp.Core.Tests) | Unit tests (NUnit), one class at a time. |
 | [tests/DesktopApp.IntegrationTests](tests/DesktopApp.IntegrationTests) | Integration tests: storage and crash log against the real file system (including locked, read-only and corrupt files), and editor workflows across `Project`, `SymbolLibrary` and `Designation`. |
 | [tests/DesktopApp.UITests](tests/DesktopApp.UITests) | UI and app tests that drive the published `DesktopApp.exe` through UI Automation (FlaUI). These cover editor features, startup, restart, bad saved data, bad input, crash handling, and telemetry with a malformed or unreachable endpoint. Every test fails if the app crashed or did not exit cleanly. |
@@ -66,6 +66,8 @@ $env:DESKTOPAPP_EXE = "$PWD\artifacts\app\DesktopApp.exe"
 dotnet test tests/DesktopApp.UITests
 ```
 
+When a UI test fails, a screenshot (taken with the app brought to the front) and the app's `crash.log` are attached to the test result. In Azure DevOps they appear on the failed test. When a test passes, they are deleted.
+
 ## Installer
 
 By default the installer project reads the app from `artifacts/app`. Publish the app as shown above, then run:
@@ -92,18 +94,56 @@ Without admin rights, the real install tests are skipped. In an elevated shell, 
 ## Pipelines
 
 ```
-PR ──► pr.yml        build + unit + integration tests (branch policy on main, release/*)
+PR ──► pr.yml        build + unit + integration tests + unsigned MSI + MSI table/payload tests
+                     (branch policy on main, Windows-PR pool)
 
-merge ──► ci.yml     Build ──► UITests ──► Package (MSI) ──► InstallerTests
-                     (main, release/*)
+merge to main ──► ci.yml     Build + sign ──► UITests ──► Package (MSI + sign) ──► InstallerTests
 
-CI run on release/* ──► release.yml   approval on DesktopApp-Production ──► universal package
+green CI run on main ──► release.yml   Verify ──► Deploy_Production (environment checks + approval) ──► universal package
+                                                 (room for Deploy_Test ──► Deploy_PrP in front of it)
 ```
 
-- **[pr.yml](pipelines/pr.yml)**: Azure Repos ignores YAML `pr:` triggers, so this pipeline is wired up as a **Build Validation branch policy**. UI tests are left out because the interactive agent is scarce.
-- **[ci.yml](pipelines/ci.yml)**: It builds once and versions the build as `1.0.<rev>`. It publishes the `app` and `uitests` artifacts and then runs the UI tests against those exact binaries on the `Windows-UI-Interactive` pool. That pool's agent runs in an auto-logged-on interactive session, not as a service. The MSI is built only after the UI tests pass. It is then tested on the same pool: its tables are checked, its files are compared with the `app` artifact, and it is installed, repaired and uninstalled for real. If the installer tests fail, the CI run fails, so the MSI is never released.
-- **[release.yml](pipelines/release.yml)**: It is triggered by a successful CI run on `release/*`. Nothing is rebuilt: the tested installer is published as a universal package to the `DesktopApp/desktop-releases` feed. Approvals are configured on the `DesktopApp-Production` environment.
-- **[templates/build-and-test.yml](pipelines/templates/build-and-test.yml)**: These are the restore, build, unit test and integration test steps. PR and CI share them, so a PR is checked the same way that main is built.
+- **[pr.yml](pipelines/pr.yml)**: Azure Repos ignores YAML `pr:` triggers, so this pipeline is wired up as a **Build Validation branch policy**. It also builds the MSI (unsigned) and runs the MSI table and payload tests, so a broken installer fails the PR rather than `main`. It also runs the Pester tests of the pipeline scripts. UI tests and real installs are left out because the interactive agent is scarce. PRs run on their own `Windows-PR` pool: PR code is unreviewed, so it never runs on the agents that produce signed builds.
+- **[ci.yml](pipelines/ci.yml)**: It builds once and versions the build as `1.0.<rev>`. It publishes the `app` and `uitests` artifacts and then runs the UI tests against those exact binaries on the `Windows-UI-Interactive` pool. That pool's agent runs in an auto-logged-on interactive session, not as a service. The MSI is built only after the UI tests pass. It is then tested on the same pool: its tables are checked, its files are compared with the `app` artifact, and it is installed, repaired and uninstalled for real. PDBs go to the symbol server, not into the MSI. Commits that only change `*.md` files or `monitoring/` don't trigger it.
+  - The two interactive jobs are limited to 30 minutes, start from a clean workspace, and first run `Reset-TestAgent.ps1`. It stops leftover `DesktopApp` processes and uninstalls any installed version, because a cancelled job skips the tests' own cleanup.
+  - Failures come with evidence. A failed UI test carries a screenshot and the crash log, a UI test that hangs for more than 5 minutes produces a dump (`--blame-hang-timeout`), and a failed install test carries its full verbose msiexec logs.
+- **[release.yml](pipelines/release.yml)**: It is triggered by every CI run on `main` that succeeds. Nothing is rebuilt. The **Verify** stage runs before anyone is asked to approve. It fails unless all of these hold:
+  - the CI run was built from `main` (a manual run can pick any CI run, so this is checked through the REST API, not trusted from the trigger);
+  - the run finished `succeeded`, not `partiallySucceeded`;
+  - the stages `Build`, `UITests`, `Package` and `InstallerTests` all ran and succeeded, none skipped;
+  - the app binaries and the MSI have a valid, timestamped signature from the expected publisher.
+
+  Then each environment deploys in order through [templates/deploy.yml](pipelines/templates/deploy.yml). The deploy job checks the signature of the exact folder it publishes, which holds only the MSI, and pushes it as a universal package to that environment's feed. Today there is one environment, `DesktopApp-Production` → `DesktopApp/desktop-releases`. To add test or pre-production, add a `deploy.yml` stage before it, as shown in release.yml. After a successful Production deployment, the released commit is tagged `v<version>` (for example `v1.0.42`), so every shipped version maps to its source.
+- **Templates** shared so that every agent works the same way:
+  - [build-and-test.yml](pipelines/templates/build-and-test.yml): restore, build, unit tests, integration tests and publish, for PR and CI. Integration tests still run when a unit test fails, but not when the build failed.
+  - [installer.yml](pipelines/templates/installer.yml): the MSI build, for PR and CI.
+  - [use-dotnet.yml](pipelines/templates/use-dotnet.yml): the SDK from `global.json` plus the .NET 10 runtime, on every agent.
+  - [prepare-test-agent.yml](pipelines/templates/prepare-test-agent.yml): the setup for the interactive agent, using a sparse checkout of only `global.json` and the scripts.
+- **[pipelines/scripts](pipelines/scripts)**:
+  - `Assert-ReleaseCandidate.ps1`: branch, result and stages of a CI run.
+  - `Assert-Signed.ps1`: signature, publisher and timestamp.
+  - `Reset-TestAgent.ps1`: puts the test agent back into a known state.
+  - `New-ReleaseTag.ps1`: tags the released commit.
+
+  [pipelines/scripts/tests](pipelines/scripts/tests) has Pester tests for all four, and PR validation runs them. Among other things they check that the release gate rejects partial runs, skipped stages, lookalike branches and missing timestamps. Each check is backed by a test that fails if the check is removed. Run them locally with:
+
+  ```powershell
+  powershell -NoProfile -File pipelines/scripts/tests/Invoke-Tests.ps1
+  ```
+
+  This runs in Windows PowerShell 5.1, the same shell the pipelines use. If Pester 5.7.1 isn't installed, the runner downloads that exact package, checks its SHA-256 and loads it without installing anything.
+
+### Deployment gates
+
+Only signed, tested and verified builds of `main` can be deployed. The checks are layered, so removing one from the YAML is not enough to get around them:
+
+| Layer | Where | What it stops |
+|---|---|---|
+| CI fails closed | ci.yml | Any failed build, test or signing step fails the run. Install tests can't be skipped (`DESKTOPAPP_REQUIRE_ELEVATED`). |
+| Signature check after signing | sign.yml | Unsigned, untimestamped or wrongly signed files never become an artifact. |
+| Verify stage | release.yml | Runs from other branches, partial or failed runs, skipped test stages, unsigned files. Runs before approval. |
+| Check before publish | deploy.yml | Anything except a signed MSI in the folder that gets published. |
+| **Environment checks** | Azure DevOps, per environment | **Branch control** (`refs/heads/main`, with *Verify branch protection*) stops a release.yml edited on another branch. **Approvals** (approvers can't approve their own runs) and an **Exclusive lock** (one deployment at a time) apply too. These live on the server, so changing the YAML cannot bypass them. |
 
 ### Quality checks
 
@@ -126,17 +166,21 @@ CI signs twice with [templates/sign.yml](pipelines/templates/sign.yml), which ru
 1. **App binaries** (`DesktopApp.exe`, `DesktopApp*.dll`) right after `dotnet publish`, before the `app` artifact is published. The UI tests, the MSI and the installer payload tests all see the signed files. The .NET runtime files in the self-contained output are already signed by Microsoft and are left alone.
 2. **The MSI**, right after it is built and before the installer tests. Release publishes exactly this signed MSI.
 
+After each signing step, `Assert-Signed.ps1` checks every signed file. The signature must be valid, it must carry a timestamp, and the certificate's CN must be the expected publisher (placeholder `Contoso`). Release runs the same check again.
+
 The private key stays in Azure and the agent holds no secret: the `DesktopApp-CodeSigning` service connection uses workload identity federation. Signatures are timestamped, so they stay valid after the certificate expires. PR builds never sign, so code that has not been reviewed is never signed.
 
 ### Azure DevOps setup required
 
-- Agent pools `Windows-Build` and `Windows-UI-Interactive`. Configure the UI agent with `--runAsAutoLogon`. Its account must be a local administrator, because the installer tests install into Program Files. Use a disposable or regularly reset machine.
-- A pipeline named `DesktopApp-CI` created from `ci.yml`, because `release.yml` refers to it by that name.
-- A Build Validation policy that runs `pr.yml` on `main` and `release/*`. Optionally, also a required status policy for `codecoverage`.
-- An environment named `DesktopApp-Production` that has the approvals you want.
+- Agent pools `Windows-PR`, `Windows-Build` and `Windows-UI-Interactive`. Keep `Windows-PR` on separate machines, because it runs unreviewed code. Ideally its agents are ephemeral or reimaged after each job. Configure the UI agent with `--runAsAutoLogon`. Its account must be a local administrator, because the installer tests install into Program Files. Use a disposable or regularly reset machine.
+- A pipeline named `DesktopApp-CI` created from `ci.yml`, because `release.yml` refers to it by that name. The stage names in ci.yml are part of the release contract: `Assert-ReleaseCandidate.ps1` requires them.
+- A Build Validation policy that runs `pr.yml` on `main`, with the path filter `/*; !*.md; !/monitoring/*` to match CI. Optionally, also a required status policy for `codecoverage`.
+- The *Create tag* permission on the repository for the project's build service identity, which the release uses to tag `v<version>`.
+- An environment named `DesktopApp-Production` with these checks: **Approvals** (release managers, with *approvers can't approve their own runs*), **Branch control** that allows only `refs/heads/main` (with *Verify branch protection*), and **Exclusive lock**. Every environment you add later, such as `DesktopApp-Test` or `DesktopApp-PrP`, gets the same branch control check. Its approvals can be lighter.
 - GitHub Advanced Security for Azure DevOps enabled on the repo (CodeQL and secret scanning).
-- An Azure Trusted Signing account `desktopapp-signing` with certificate profile `desktopapp-public`, plus an Azure Resource Manager service connection `DesktopApp-CodeSigning` (workload identity federation) whose identity has the *Trusted Signing Certificate Profile Signer* role. Allow only `DesktopApp-CI` to use the connection, and add a branch control check for `main` and `release/*`.
-- The universal package feed `DesktopApp/desktop-releases`.
+- An Azure Trusted Signing account `desktopapp-signing` with certificate profile `desktopapp-public`, plus an Azure Resource Manager service connection `DesktopApp-CodeSigning` (workload identity federation) whose identity has the *Trusted Signing Certificate Profile Signer* role. Allow only `DesktopApp-CI` to use the connection, and add a branch control check for `main`.
+- The universal package feed `DesktopApp/desktop-releases`. Only the release pipeline's identity may publish to it.
+- The Azure Artifacts symbol server (used by `PublishSymbols@2`).
 - A variable group `DesktopApp-Telemetry` with `AppInsightsConnectionString` (see [Telemetry](#telemetry-application-insights)).
 
 ## Telemetry (Application Insights)

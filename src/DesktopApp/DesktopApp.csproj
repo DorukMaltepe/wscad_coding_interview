@@ -6,6 +6,9 @@
     <!-- Self-contained, so customers do not need the .NET Desktop Runtime installed. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <!-- No PDBs in the published app, so the MSI ships no debug info. CI sends them to the symbol server instead. -->
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <AllowedReferenceRelatedFileExtensions>.xml</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
   <ItemGroup>
     <!-- Application Insights target for shipped builds; CI sets it from the DesktopApp-Telemetry variable group. Empty = telemetry off. -->

@@ -1,0 +1,18 @@
+# Builds the MSI from a published app folder. Shared by PR validation (unsigned) and CI (signed afterwards),
+# so a broken installer fails the PR instead of main.
+
+parameters:
+  - name: appDir
+    type: string
+  - name: version
+    type: string
+  - name: outputDir
+    type: string
+
+steps:
+  - script: >-
+      dotnet build installer/DesktopApp.Installer/DesktopApp.Installer.wixproj -c Release
+      -p:AppDir=${{ parameters.appDir }}
+      -p:AppVersion=${{ parameters.version }}
+      -o ${{ parameters.outputDir }}
+    displayName: Build MSI from published app

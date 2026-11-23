@@ -1,0 +1,63 @@
+# Deploys the verified MSI of the CI run to one environment. release.yml uses this once per environment,
+# in promotion order (e.g. Test -> PrP -> Production). A stage starts only after the stage before it succeeded.
+# The real gate is the Azure DevOps environment: its approvals, branch control (main only) and exclusive lock
+# are configured on the server, so editing this YAML cannot bypass them.
+
+parameters:
+  # Stage name suffix, e.g. Test, PrP, Production.
+  - name: name
+    type: string
+  # Azure DevOps environment whose approvals and checks gate this stage.
+  - name: environment
+    type: string
+  # Universal package feed this environment installs from.
+  - name: feed
+    type: string
+  # Tag the released commit v<version> after publishing. Only the final (customer-facing) environment does this.
+  - name: tagRelease
+    type: boolean
+    default: false
+
+stages:
+  - stage: Deploy_${{ parameters.name }}
+    displayName: Deploy to ${{ parameters.name }}
+    pool: Windows-Build
+    jobs:
+      - deployment: Publish
+        displayName: Publish installer to ${{ parameters.feed }}
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self # For the verification script only.
+
+                # Only the MSI: no .wixpdb or other build output reaches an environment.
+                - download: ci
+                  artifact: installer
+                  patterns: '*.msi'
+
+                # Checks the exact folder that gets published: every file in it must be a signed, timestamped MSI.
+                - powershell: >-
+                    & '$(Build.SourcesDirectory)/pipelines/scripts/Assert-Signed.ps1'
+                    -Folder '$(Pipeline.Workspace)/ci/installer' -Files '*'
+                  displayName: Verify what is about to be published
+
+                - task: UniversalPackages@1
+                  displayName: Publish installer as universal package
+                  inputs:
+                    command: publish
+                    feed: ${{ parameters.feed }}
+                    packageName: desktopapp-installer
+                    packageVersion: $(resources.pipeline.ci.runName)
+                    directory: $(Pipeline.Workspace)/ci/installer
+                    packageDescription: DesktopApp installer $(resources.pipeline.ci.runName)
+
+                # The build service needs "Create tag" on the repository.
+                - ${{ if parameters.tagRelease }}:
+                    - powershell: >-
+                        & '$(Build.SourcesDirectory)/pipelines/scripts/New-ReleaseTag.ps1'
+                        -Version $(resources.pipeline.ci.runName) -Commit $(resources.pipeline.ci.sourceCommit)
+                      displayName: Tag released commit
+                      env:
+                        SYSTEM_ACCESSTOKEN: $(System.AccessToken)

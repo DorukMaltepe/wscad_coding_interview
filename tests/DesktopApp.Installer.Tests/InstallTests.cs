@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using NUnit.Framework.Interfaces;
 
 namespace DesktopApp.Installer.Tests;
 
@@ -29,9 +30,19 @@ public class InstallTests
     [TearDown]
     public void UninstallLeftovers()
     {
+        if (_logDir is null)
+            return;
+
+        // The failure message holds only the last lines of a log; attach the full verbose msiexec logs to the failed test.
+        if (TestContext.CurrentContext.Result.Outcome.Status == TestStatus.Failed)
+        {
+            foreach (var log in Directory.GetFiles(_logDir, "*.log"))
+                TestContext.AddTestAttachment(log);
+        }
+
         // A failed test must not leave the product behind for the next run.
-        if (_logDir is not null && UninstallKey() is not null)
-            TestEnvironment.MsiExec($"/x {_productCode}", Path.Combine(_logDir!, "cleanup.log"));
+        if (UninstallKey() is not null)
+            TestEnvironment.MsiExec($"/x {_productCode}", Path.Combine(_logDir, "cleanup.log"));
     }
 
     [Test]

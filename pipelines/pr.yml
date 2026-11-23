@@ -1,11 +1,60 @@
 # PR validation: fast feedback before merge.
 # Azure Repos Git ignores YAML `pr:` triggers. This pipeline is wired up as a
-# Build Validation branch policy on main and release/* instead.
+# Build Validation branch policy on main instead.
 # UI tests are not run here: the interactive agent is a scarce resource, so they run in CI after merge.
 
 trigger: none
 
-pool: Windows-Build
+# Own pool: PR code is unreviewed, so it must never run on the Windows-Build agents that produce signed builds.
+pool: Windows-PR
+
+variables:
+  version: '1.0.0' # PR builds are never released.
 
 steps:
   - template: templates/build-and-test.yml
+    parameters:
+      version: $(version)
+
+  # The installer is not in the solution, so it is built here too: a broken Package.wxs fails the PR, not main.
+  - template: templates/installer.yml
+    parameters:
+      appDir: $(Build.ArtifactStagingDirectory)/app
+      version: $(version)
+      outputDir: $(Build.ArtifactStagingDirectory)/installer
+
+  # MSI tables and payload only: nothing is installed or started, so this is safe on a service agent without a desktop.
+  - script: >-
+      dotnet test tests/DesktopApp.Installer.Tests --no-build -c Release
+      --filter "FullyQualifiedName~MsiPackageTests|FullyQualifiedName~.Payload_"
+      --logger trx --results-directory $(Agent.TempDirectory)/InstallerTestResults
+    displayName: Installer package tests
+    env:
+      DESKTOPAPP_MSI: $(Build.ArtifactStagingDirectory)/installer/DesktopApp-$(version).msi
+      DESKTOPAPP_APP_DIR: $(Build.ArtifactStagingDirectory)/app
+      DESKTOPAPP_VERSION: $(version)
+
+  - task: PublishTestResults@2
+    displayName: Publish installer test results
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: VSTest
+      testResultsFiles: '**/*.trx'
+      searchFolder: $(Agent.TempDirectory)/InstallerTestResults
+      testRunTitle: Installer package tests
+
+  # Pester tests of the release gate and the other pipeline scripts, in Windows PowerShell 5.1 like the pipelines
+  # run them. They don't depend on the .NET build, so they also run when it failed.
+  - powershell: >-
+      & '$(Build.SourcesDirectory)/pipelines/scripts/tests/Invoke-Tests.ps1'
+      -ResultPath '$(Agent.TempDirectory)/PesterResults/pipeline-scripts.xml'
+    displayName: Pipeline script tests
+    condition: succeededOrFailed()
+
+  - task: PublishTestResults@2
+    displayName: Publish pipeline script test results
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: NUnit
+      testResultsFiles: '$(Agent.TempDirectory)/PesterResults/*.xml'
+      testRunTitle: Pipeline script tests
