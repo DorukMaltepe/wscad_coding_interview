@@ -11,4 +11,13 @@
     <DefineConstants>AppDir=$(AppDir);AppVersion=$(AppVersion)</DefineConstants>
     <OutputName>DesktopApp-$(AppVersion)</OutputName>
   </PropertyGroup>
+
+  <!-- WiX's up-to-date check only compares the payload files of the previous build. A republished app with older
+       timestamps, or another AppDir, would leave a stale MSI. Removing the tracking file makes every build bind afresh. -->
+  <Target Name="AlwaysBindPayload" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <_PreviousBindTracking Include="$(IntermediateOutputPath)$(MSBuildProjectFile).BindTracking*" />
+    </ItemGroup>
+    <Delete Files="@(_PreviousBindTracking)" />
+  </Target>
 </Project>
